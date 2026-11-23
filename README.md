@@ -1,34 +1,65 @@
-# Brütal Legend render priority on Apple silicon
+# Brütal Legend — Apple Silicon Performance Fix
 
-This launcher raises the Steam Mac port's `Render Thread` to scheduling priority 47 when the thread would otherwise run at a lower priority. macOS continues to schedule the thread. On the tested M2, the thread went from priority 3 to 47 and spent over 99.9% of its sampled CPU time on performance cores during a three-second in-game sample. The owner reported that the game ran better.
+**A small, open-source workaround for severe frame-rate problems in the Steam Mac version of Brütal Legend on Apple Silicon.** It changes the scheduling priority of the game's render thread without modifying the game installation.
 
-## Requirements
+> **Tested result:** On an M2 Mac running macOS 27.0.1, the unmodified game ran poorly even with resolution and graphics settings reduced to minimum. With this launcher, gameplay became smooth at maximum graphics settings. This is a user-observed improvement, not a measured FPS benchmark. Other configurations have not yet been tested.
 
-- An Apple silicon Mac with Rosetta support for this game. Verified on an M2 with macOS 27.0.1. Other Macs and macOS releases have not been tested.
-- The Intel macOS Steam build of Brütal Legend, installed through Steam. Open Steam and sign in to an account with access to the game.
-- Xcode or the Xcode Command Line Tools to compile the small Intel helper locally. To install the command-line tools, run `xcode-select --install` in Terminal.
+## The problem
 
-See [Apple's Rosetta support information](https://support.apple.com/en-us/102527) for macOS compatibility.
+The Mac port can exhibit unexpectedly low frame rates on Apple Silicon. Lowering the resolution and graphics quality may make the game look worse **without improving performance**.
 
-## Launch
+During investigation on an M2 Mac:
 
-1. Clone or download this repository and keep its files together.
-2. Quit the game if it is running and leave Steam open.
-3. Double-click `Play Brütal Legend.command` in Finder, or run it from Terminal:
+- The four **efficiency cores** were heavily active while the **performance cores** were largely idle.
+- GPU utilization hovered around **30%**, despite the poor frame rate.
+- Reducing resolution and disabling graphics options did not resolve the issue.
+- The game's thread named `Render Thread` had a scheduling priority of **3**.
+
+After raising that specific thread's priority to **47**, the performance cores became active, and the game played smoothly even with graphics settings at maximum. In a separate three-second in-game CPU sample, the render thread spent **over 99.9%** of its sampled CPU time on performance cores.
+
+**Interpretation:** The evidence points to render-thread scheduling as the performance bottleneck on the tested machine. It does not yet establish why the original priority was selected or whether all Apple Silicon Macs are affected.
+
+## Quick start
+
+### Requirements
+
+- An Apple Silicon Mac with Rosetta support. **Verified:** M2, macOS 27.0.1.
+- The **Mac version of Brütal Legend from Steam**, installed and available to your signed-in Steam account.
+- Xcode or **Xcode Command Line Tools**, used to compile the helper locally.
+
+To install the command-line tools if needed:
+
+```sh
+xcode-select --install
+```
+
+See [Apple's Rosetta documentation](https://support.apple.com/en-us/102527) for compatibility information.
+
+### Run the fix
+
+1. Clone or download this repository, keeping its files together.
+2. Open Steam, sign in, and make sure Brütal Legend is **not** already running.
+3. Double-click **`Play Brütal Legend.command`** in Finder, or run:
 
    ```sh
    ./'Play Brütal Legend.command'
    ```
 
-The launcher builds the helper on first use and rebuilds it when its source or build script changes. The default Steam library and additional libraries registered in `libraryfolders.vdf` are searched automatically, including libraries on external drives. Standard Steam paths are resolved relative to the current user's home directory.
+The launcher locates the installed Steam game, builds and ad-hoc signs the small Intel helper on first use, then starts the game with the fix applied. It rebuilds the helper if `render-priority.c` or `build.sh` changes.
 
-To check which copy it found without launching the game:
+**To play without the fix:** quit the game and launch it normally from Steam. Nothing is permanently installed or patched.
+
+## Finding the Steam installation
+
+The launcher searches the default Steam location and additional Steam library folders registered in `libraryfolders.vdf`, including libraries on external drives.
+
+To display the detected game path without starting it:
 
 ```sh
 ./'Play Brütal Legend.command' --print-game-path
 ```
 
-For an unregistered library or to select a specific copy, give the launcher the path to the Steam game's `Buddha.app`. In Steam, use **Manage → Browse local files** to find it.
+If the game is in an unregistered location, specify its `Buddha.app` path. You can find that app in Steam using **Manage → Browse local files**.
 
 ```sh
 BRUTAL_LEGEND_APP="/Volumes/Games/Steam Library/steamapps/common/BrutalLegend/Buddha.app" \
@@ -37,8 +68,43 @@ BRUTAL_LEGEND_APP="/Volumes/Games/Steam Library/steamapps/common/BrutalLegend/Bu
 
 ## How it works
 
-`build.sh` compiles and ad-hoc signs an Intel dynamic library because the game runs as an Intel process under Rosetta. The launcher loads the library into that one game process using `DYLD_INSERT_LIBRARIES`. Steamworks uses the bundled `steam_appid.txt` in the working directory to recognize the direct launch. [Steamworks API documentation](https://partner.steamgames.com/doc/api/steam_api)
+The game's executable is named `Buddha`. The workaround targets its thread named **`Render Thread`**, rather than increasing the priority of the entire game.
 
-`render-priority.c` hooks the thread naming and scheduling calls. It raises the named render thread's normal scheduling priority when the thread starts and guards against later attempts to lower it. The launch log records the initial priority change, for example `Buddha Render Thread priority: 3 -> 47`.
+1. `build.sh` compiles `render-priority.c` into an **x86_64 dynamic library** and ad-hoc signs it for loading into the Intel game process running under Rosetta.
+2. The launcher starts the installed executable with `DYLD_INSERT_LIBRARIES`, injecting that library **only for this launch**.
+3. The library uses Mach-O `__interpose` to intercept `pthread_setname_np` and `pthread_setschedparam`.
+4. When it identifies the named render thread using normal scheduling (`SCHED_OTHER`), it boosts scheduling priority up to **47** and intercepts later attempts to lower that priority.
 
-The effect ends when the game quits. To use the original settings, start the game from Steam. The launcher uses the installed game and does not edit its files or change system scheduling settings. Steam overlay behavior with this direct launch has not been verified.
+The launch log can show a successful adjustment such as:
+
+```text
+Buddha Render Thread priority: 3 -> 47
+```
+
+macOS still decides which CPU core executes the thread; this workaround **does not pin threads to particular cores**. The observed shift onto performance cores is an outcome on the tested M2, not an explicit CPU-affinity setting.
+
+For Steamworks initialization, the launcher uses the included `steam_appid.txt` and sets Steam app/game IDs for the direct game launch. See the [Steamworks API documentation](https://partner.steamgames.com/doc/api/steam_api).
+
+## Safety, limitations, and troubleshooting
+
+- **No game-file modifications:** The workaround uses the existing Steam installation and does not change system-wide scheduling preferences.
+- **Reversible:** The changes apply only to the game process launched with this script and disappear when it exits.
+- **Build from source:** The helper is compiled locally, so its implementation can be inspected before use.
+- **Compatibility is not guaranteed:** Only the M2/macOS 27.0.1 combination has been verified. Updates to macOS, Steam, or the game could affect the workaround.
+- **Steam overlay:** Behavior with direct launching has not been verified.
+- **Game not found:** Confirm the Mac version is installed; use `--print-game-path` or set `BRUTAL_LEGEND_APP`.
+- **Game already running:** Quit the original game before launching this version.
+- **Steam not detected:** Open Steam and sign in first.
+- **Build fails:** Confirm Xcode Command Line Tools are installed.
+
+The launcher writes the game's standard error output to `last-launch.log` in the repository directory. Review the log before sharing it publicly; software logs can include personal information.
+
+## Help validate it
+
+If you try this on another Apple Silicon Mac, a report or issue with your **Mac model, macOS version, game version, and observed performance before/after** would be useful. Quantitative FPS or frame-time measurements are especially welcome. Please distinguish measured results from visual impressions.
+
+## Attribution
+
+Developed and tested by **Reza Farivar**, with coding assistance from OpenAI Codex.
+
+Brütal Legend is the property of its respective rights holders. This independent community workaround is not affiliated with or endorsed by Double Fine Productions, Valve, or Apple.
