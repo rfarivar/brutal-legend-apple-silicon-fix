@@ -107,4 +107,8 @@ If you try this on another Apple Silicon Mac, a report or issue with your **Mac 
 
 Developed and tested by **Reza Farivar**, with coding assistance from OpenAI Codex.
 
-Brütal Legend is the property of its respective rights holders. This independent community workaround is not affiliated with or endorsed by Double Fine Productions, Valve, or Apple.
+## License
+
+This project is released under the MIT License. See LICENSE for details.
+
+Brütal Legend is the property of its respective rights holders. This project is an independent community workaround and is not affiliated with Double Fine Productions.
